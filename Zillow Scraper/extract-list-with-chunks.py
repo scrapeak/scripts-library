@@ -7,10 +7,8 @@ import time
 # Comments for Steps in the process
 """
 Steps:
-1- Set the listing url
-2- Run the createPriceChunks if you don't have price range list
-3- Set priceChunkTaskId and Get price range list 
-4- And then start the scraper
+1- Set the listing url and your api key
+2- Start the scraper
 """
 
 # Set the desired settings for Pandas display
