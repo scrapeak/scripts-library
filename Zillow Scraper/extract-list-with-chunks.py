@@ -73,84 +73,105 @@ def get_listings(api_key, listing_url):
     # Make a GET request to fetch the listings
     return requests.request("GET", url, params=querystring)
 
-# Replace "TASK_ID" with the actual task ID obtained from createPriceChunks or set to None
-priceChunkTaskId = "TASK_ID"
+# Wait for the price chunks task to finish.
+def wait(api_key, task_id):
+    while True:
+        url = "https://app.scrapeak.com/api/task/status"
 
-# Check if priceChunkTaskId is provided, then fetch price chunk list
-if priceChunkTaskId:
-    priceChunkListResp = getPriceChunkList(api_key, priceChunkTaskId)
-    priceChunkList = priceChunkListResp["data"]["result"]["chunks"]
-
-    # Iterate through each price range and fetch listings
-    for priceRange in priceChunkList:
-        # Display the price range being processed
-        print("priceRange -> ", priceRange)
-        # priceRange : {'chunkMinPrice': 0, 'chunkMaxPrice': 122070, 'chunkedlistSize': 429}
+        # Parameters for the API request
+        querystring = {
+            "api_key": api_key,
+            "task_id": task_id
+        }
         
-        # Parse and extract searchQueryStateData from the listing URL
-        searchQueryStateData = {}
-        for param_key, param_value in parse.parse_qs(parse.urlparse(listing_url).query).items():
-            value = param_value[0]
-            if value[0] == "{":
-                value = json.loads(value)
-            searchQueryStateData[param_key] = value
-                
-        # Start fetching listings for the given price range and pagination
-        pageNumber = 1
-        while True:
-            # Update the searchQueryStateData with the current price range and page number
-            searchQueryStateData["searchQueryState"]["pagination"] =  {"currentPage":pageNumber}
-            searchQueryStateData["searchQueryState"]["filterState"]["price"] = {"min":priceRange["chunkMinPrice"], "max":priceRange["chunkMaxPrice"]}
+        resp = requests.request("GET", url, params=querystring)
+        if resp.json()["data"]["status"] == "SUCCESS":
+            break
+        else:
+            print("Waiting for the task to finish...")
+            time.sleep(5)
+            continue
+
+
+taskInfo = createPriceChunks(api_key, listing_url)
+print("The price chunks task has been created successfully. Details -> ", taskInfo)
+
+wait(api_key, taskInfo["data"]["task_id"])
+print("The price chunks task has been completed successfully.")
+
+# Replace "TASK_ID" with the actual task ID obtained from createPriceChunks
+priceChunkTaskId = taskInfo["data"]["task_id"]
+
+
+priceChunkListResp = getPriceChunkList(api_key, priceChunkTaskId)
+priceChunkList = priceChunkListResp["data"]["result"]["chunks"]
+
+# Iterate through each price range and fetch listings
+for priceRange in priceChunkList:
+    # Display the price range being processed
+    print("priceRange -> ", priceRange)
+    # priceRange : {'chunkMinPrice': 0, 'chunkMaxPrice': 122070, 'chunkedlistSize': 429}
+    
+    # Parse and extract searchQueryStateData from the listing URL
+    searchQueryStateData = {}
+    for param_key, param_value in parse.parse_qs(parse.urlparse(listing_url).query).items():
+        value = param_value[0]
+        if value[0] == "{":
+            value = json.loads(value)
+        searchQueryStateData[param_key] = value
             
-            # Create a new listing URL with the updated searchQueryStateData
-            listing_url = listing_url.split("searchQueryState=")[0]+parse.urlencode(searchQueryStateData)
-            listing_url = listing_url.replace("%27", "%22").replace("True","true").replace("False", "false").replace("None","null")
-            
-            # Display the generated listing URL for debugging purposes
-            print(listing_url)
-            
-            # Fetch the listings using the updated listing URL
-            listing_response = get_listings(api_key, listing_url)
-            
-            # Display the response content for debugging purposes
+    # Start fetching listings for the given price range and pagination
+    pageNumber = 1
+    while True:
+        # Update the searchQueryStateData with the current price range and page number
+        searchQueryStateData["searchQueryState"]["pagination"] =  {"currentPage":pageNumber}
+        searchQueryStateData["searchQueryState"]["filterState"]["price"] = {"min":priceRange["chunkMinPrice"], "max":priceRange["chunkMaxPrice"]}
+        
+        # Create a new listing URL with the updated searchQueryStateData
+        listing_url = listing_url.split("searchQueryState=")[0]+parse.urlencode(searchQueryStateData)
+        listing_url = listing_url.replace("%27", "%22").replace("True","true").replace("False", "false").replace("None","null")
+        
+        # Display the generated listing URL for debugging purposes
+        print(listing_url)
+        
+        # Fetch the listings using the updated listing URL
+        listing_response = get_listings(api_key, listing_url)
+        
+        # Display the response content for debugging purposes
+        print(listing_response.text)
+
+        # Check if the response was successful and process the listings
+        if listing_response.status_code == 200:
+            data = listing_response.json()["data"]
+            if "cat1" in data:
+                cat1_data = data["cat1"]
+                print(data["categoryTotals"]["cat1"]["totalResultCount"])
+                if data["categoryTotals"]["cat1"]["totalResultCount"] >= 1:
+                    if "searchResults" in cat1_data:
+                        search_results = cat1_data["searchResults"]
+                        if "listResults" in search_results:
+                            # Normalize and filter the JSON data to create a DataFrame
+                            df_listings = pd.json_normalize(search_results["listResults"])
+
+                            # Select only desired columns
+                            selected_columns = ["hdpData.homeInfo.zpid", "hdpData.homeInfo.homeType", "hdpData.homeInfo.streetAddress", "hdpData.homeInfo.city", "hdpData.homeInfo.state", "hdpData.homeInfo.zipcode", "hdpData.homeInfo.livingArea", "hdpData.homeInfo.lotAreaValue", "hdpData.homeInfo.bedrooms", "hdpData.homeInfo.bathrooms", "detailUrl"]
+                            df_selected = df_listings[selected_columns]
+
+                            # Display the information about the DataFrame
+                            print("Number of rows:", len(df_selected))
+                            print("Number of columns:", len(df_selected.columns))
+                            
+                            # Save the DataFrame to a CSV file with price range and page number in the filename
+                            df_selected.to_csv("listings_{}_to_{}_p{}.csv".format(priceRange["chunkMinPrice"], priceRange["chunkMaxPrice"], pageNumber), index=False)
+                else:
+                    # No more listings found, break the loop
+                    break
+        else:
+            # Display the error response if fetching listings failed
             print(listing_response.text)
+            print("Failed to fetch listings.")
+            
+        # Increment the page number for the next iteration
+        pageNumber += 1
 
-            # Check if the response was successful and process the listings
-            if listing_response.status_code == 200:
-                data = listing_response.json()["data"]
-                if "cat1" in data:
-                    cat1_data = data["cat1"]
-                    print(data["categoryTotals"]["cat1"]["totalResultCount"])
-                    if data["categoryTotals"]["cat1"]["totalResultCount"] >= 1:
-                        if "searchResults" in cat1_data:
-                            search_results = cat1_data["searchResults"]
-                            if "listResults" in search_results:
-                                # Normalize and filter the JSON data to create a DataFrame
-                                df_listings = pd.json_normalize(search_results["listResults"])
 
-                                # Select only desired columns
-                                selected_columns = ["hdpData.homeInfo.zpid", "hdpData.homeInfo.homeType", "hdpData.homeInfo.streetAddress", "hdpData.homeInfo.city", "hdpData.homeInfo.state", "hdpData.homeInfo.zipcode", "hdpData.homeInfo.livingArea", "hdpData.homeInfo.lotAreaValue", "hdpData.homeInfo.bedrooms", "hdpData.homeInfo.bathrooms", "detailUrl"]
-                                df_selected = df_listings[selected_columns]
-
-                                # Display the information about the DataFrame
-                                print("Number of rows:", len(df_selected))
-                                print("Number of columns:", len(df_selected.columns))
-                                
-                                # Save the DataFrame to a CSV file with price range and page number in the filename
-                                df_selected.to_csv("listings_{}_to_{}_p{}.csv".format(priceRange["chunkMinPrice"], priceRange["chunkMaxPrice"], pageNumber), index=False)
-                    else:
-                        # No more listings found, break the loop
-                        break
-            else:
-                # Display the error response if fetching listings failed
-                print(listing_response.text)
-                print("Failed to fetch listings.")
-                
-            # Increment the page number for the next iteration
-            pageNumber += 1
-
-# If priceChunkTaskId is not provided, create price chunks first and wait for the task to finish.
-else:
-    taskInfo = createPriceChunks(api_key, listing_url)
-    print(taskInfo)
-    # Wait for the price chunks task to finish.
